@@ -30,6 +30,19 @@ class NotificationService {
 
     // Initialize timezone data
     tz_data.initializeTimeZones();
+    
+    // Set timezone to Asia/Manila (Philippines)
+    try {
+      final location = tz.getLocation('Asia/Manila');
+      tz.setLocalLocation(location);
+      debugPrint('✅ Timezone set to Asia/Manila (Philippines)');
+      debugPrint('   Current time in Manila: ${tz.TZDateTime.now(location)}');
+    } catch (e) {
+      debugPrint('⚠️ Warning: Could not set timezone to Asia/Manila: $e');
+      debugPrint('   Using device local timezone instead');
+      debugPrint('   Current local time: ${tz.TZDateTime.now(tz.local)}');
+    }
+    
     debugPrint('Timezone data initialized');
 
     // Android initialization settings
@@ -68,6 +81,12 @@ class NotificationService {
     // Check permissions status
     final hasPermissions = await arePermissionsGranted();
     debugPrint('Notification permissions status: $hasPermissions');
+    
+    if (!hasPermissions && Platform.isAndroid) {
+      debugPrint('⚠️ WARNING: Notification permissions not granted!');
+      debugPrint('   For real devices: Go to Settings > Apps > Your App > Notifications > Enable');
+      debugPrint('   The app will request permissions when scheduling notifications.');
+    }
 
     _initialized = true;
     debugPrint('Notification service initialization complete');
@@ -88,19 +107,20 @@ class NotificationService {
         debugPrint('Notification permission granted: $granted');
 
         // Create notification channel (required for Android 8.0+)
+        // Use maximum importance for real devices to ensure notifications are shown
         await androidImplementation.createNotificationChannel(
           const AndroidNotificationChannel(
             'task_reminders',
             'Task Reminders',
             description: 'Notifications for task deadlines',
-            importance: Importance.high,
+            importance: Importance.max, // Changed from high to max for better visibility on real devices
             playSound: true,
             enableVibration: true,
             enableLights: true,
             showBadge: true,
           ),
         );
-        debugPrint('Notification channel created successfully');
+        debugPrint('✅ Notification channel created successfully with MAX importance');
         
         // Request exact alarm permission for Android 12+ (if not already granted)
         if (Platform.isAndroid) {
@@ -176,7 +196,18 @@ class NotificationService {
   /// Check if notifications are enabled
   Future<bool> areNotificationsEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('notifications_enabled') ?? true;
+    // Check both old key (for migration) and new key
+    final oldValue = prefs.getBool('notifications');
+    final newValue = prefs.getBool('notifications_enabled');
+    
+    // If old key exists, migrate to new key
+    if (oldValue != null && newValue == null) {
+      await prefs.setBool('notifications_enabled', oldValue);
+      await prefs.remove('notifications');
+      return oldValue;
+    }
+    
+    return newValue ?? true;
   }
 
   /// Set notifications enabled/disabled
@@ -199,38 +230,50 @@ class NotificationService {
       return;
     }
 
-    final now = DateTime.now();
+    // Get Manila timezone for accurate scheduling
+    final manilaLocation = tz.getLocation('Asia/Manila');
+    final nowManila = tz.TZDateTime.now(manilaLocation);
+    final deadlineManila = tz.TZDateTime.from(deadline, manilaLocation);
 
-    // Don't schedule if deadline is in the past
-    if (deadline.isBefore(now)) {
-      debugPrint('🔔 Deadline is in the past, skipping notification scheduling for task "$taskTitle"');
+    // Don't schedule if deadline is in the past (check in Manila timezone)
+    if (deadlineManila.isBefore(nowManila)) {
+      debugPrint('🔔 Deadline is in the past (Manila time), skipping notification scheduling for task "$taskTitle"');
+      debugPrint('   Deadline: ${deadlineManila.toString()}');
+      debugPrint('   Now: ${nowManila.toString()}');
       return;
     }
-
-    // Calculate notification times
-    final oneHourBefore = deadline.subtract(const Duration(hours: 1));
-    final thirtyMinutesBefore = deadline.subtract(const Duration(minutes: 30));
-    final timeUntilDeadline = deadline.difference(now);
-    final timeUntilOneHour = oneHourBefore.difference(now);
-    final timeUntilThirtyMin = thirtyMinutesBefore.difference(now);
+    
+    // Calculate notification times in Manila timezone
+    final oneHourBefore = deadlineManila.subtract(const Duration(hours: 1));
+    final thirtyMinutesBefore = deadlineManila.subtract(const Duration(minutes: 30));
+    final timeUntilDeadline = deadlineManila.difference(nowManila);
+    final timeUntilOneHour = oneHourBefore.difference(nowManila);
+    final timeUntilThirtyMin = thirtyMinutesBefore.difference(nowManila);
 
     debugPrint('🔔 Scheduling notifications for task "$taskTitle"');
     debugPrint('   Task ID: $taskId');
-    debugPrint('   Deadline: ${deadline.toString()}');
-    debugPrint('   Current time: ${now.toString()}');
+    debugPrint('   Deadline (UTC): ${deadline.toString()}');
+    debugPrint('   Deadline (Manila): ${deadlineManila.toString()}');
+    debugPrint('   Current time (Manila): ${nowManila.toString()}');
     debugPrint('   Time until deadline: ${timeUntilDeadline.inMinutes} minutes (${timeUntilDeadline.inHours} hours)');
     debugPrint('   Time until 1-hour notification: ${timeUntilOneHour.inMinutes} minutes');
     debugPrint('   Time until 30-minute notification: ${timeUntilThirtyMin.inMinutes} minutes');
 
     // Schedule 1 hour before notification
-    // Schedule if deadline is more than 30 minutes away (to avoid overlap with 30-min notification)
-    if (timeUntilDeadline.inMinutes > 30) {
+    // IMPORTANT: Schedule if deadline is MORE than 1 hour away (not just 30 minutes)
+    // This ensures the 1-hour notification always fires when there's at least 1 hour until deadline
+    if (timeUntilDeadline.inMinutes >= 60) {
       final minutesUntilNotification = timeUntilOneHour.inMinutes;
-      DateTime notificationTime = oneHourBefore;
       
+      // If the 1-hour-before time is in the past (more than 1 minute ago), skip it
+      if (minutesUntilNotification < -1) {
+        debugPrint(
+          '⏭️ Skipping 1-hour notification: notification time is ${minutesUntilNotification.abs()} minutes in the past',
+        );
+      }
       // If the 1-hour-before time is exactly now or very close (within 1 minute),
       // show the notification immediately
-      if (minutesUntilNotification <= 1 && minutesUntilNotification >= -1) {
+      else if (minutesUntilNotification <= 1 && minutesUntilNotification >= -1) {
         debugPrint(
           '🔔 1-hour notification time is now (or very close), showing immediately',
         );
@@ -239,44 +282,41 @@ class NotificationService {
           body: 'You have 1 hour left to complete "$taskTitle"',
         );
       }
-      // If the 1-hour-before time is in the past (more than 1 minute ago) or very close (1-2 minutes),
-      // schedule it for 2 minutes from now to ensure it fires
-      // This handles the case where periodic rescheduling catches a missed notification
-      else if (minutesUntilNotification < 2 && minutesUntilNotification > -5) {
-        // Only schedule if it's not too far in the past (within 5 minutes)
-        notificationTime = now.add(const Duration(minutes: 2));
+      // If the 1-hour-before time is very close (1-5 minutes), schedule it for a few minutes from now
+      else if (minutesUntilNotification > 1 && minutesUntilNotification < 5) {
+        final notificationTime = nowManila.add(const Duration(minutes: 2));
         debugPrint(
-          '⚠️ 1-hour notification time would be in ${minutesUntilNotification < 0 ? "the past" : "$minutesUntilNotification minutes"}, scheduling for 2 minutes from now instead',
+          '⚠️ 1-hour notification time is very close ($minutesUntilNotification minutes), scheduling for 2 minutes from now to ensure delivery',
         );
         
         await _scheduleNotification(
           id: taskId * 10 + 1, // Unique ID for 1-hour notification
           title: 'Task Reminder',
           body: 'You have 1 hour left to complete "$taskTitle"',
-          scheduledDate: notificationTime,
+          scheduledDate: notificationTime.toUtc(),
         );
       }
-      // Normal case: schedule for exactly 1 hour before
-      else if (notificationTime.isAfter(now)) {
+      // Normal case: schedule for exactly 1 hour before (if it's in the future)
+      else if (oneHourBefore.isAfter(nowManila)) {
         debugPrint(
-          '🔔 Scheduling 1-hour notification for: ${notificationTime.toString()}',
+          '🔔 Scheduling 1-hour notification for: ${oneHourBefore.toString()} (Manila time)',
         );
-        debugPrint('   (${notificationTime.difference(now).inMinutes} minutes from now)');
+        debugPrint('   (${timeUntilOneHour.inMinutes} minutes from now)');
         
         await _scheduleNotification(
           id: taskId * 10 + 1, // Unique ID for 1-hour notification
           title: 'Task Reminder',
           body: 'You have 1 hour left to complete "$taskTitle"',
-          scheduledDate: notificationTime,
+          scheduledDate: oneHourBefore.toUtc(),
         );
       } else {
         debugPrint(
-          '⏭️ Skipping 1-hour notification: notification time is too far in the past (${minutesUntilNotification} minutes ago)',
+          '⏭️ Skipping 1-hour notification: notification time is in the past',
         );
       }
     } else {
       debugPrint(
-        '⏭️ Skipping 1-hour notification: deadline is only ${timeUntilDeadline.inMinutes} minutes away (need more than 30 minutes)',
+        '⏭️ Skipping 1-hour notification: deadline is only ${timeUntilDeadline.inMinutes} minutes away (need at least 60 minutes)',
       );
     }
 
@@ -284,11 +324,16 @@ class NotificationService {
     // Schedule if deadline is 30 minutes or more away
     if (timeUntilDeadline.inMinutes >= 30) {
       final minutesUntilNotification = timeUntilThirtyMin.inMinutes;
-      DateTime notificationTime = thirtyMinutesBefore;
       
+      // If the 30-minute-before time is in the past (more than 1 minute ago), skip it
+      if (minutesUntilNotification < -1) {
+        debugPrint(
+          '⏭️ Skipping 30-minute notification: notification time is ${minutesUntilNotification.abs()} minutes in the past',
+        );
+      }
       // If the 30-minute-before time is exactly now or very close (within 1 minute),
       // show the notification immediately
-      if (minutesUntilNotification <= 1 && minutesUntilNotification >= -1) {
+      else if (minutesUntilNotification <= 1 && minutesUntilNotification >= -1) {
         debugPrint(
           '🔔 30-minute notification time is now (or very close), showing immediately',
         );
@@ -297,33 +342,32 @@ class NotificationService {
           body: 'You have 30 minutes left to complete "$taskTitle"',
         );
       }
-      // If the 30-minute-before time is in the past (more than 1 minute ago) or very close (1-2 minutes),
-      // schedule it for 2 minutes from now to ensure it fires
-      else if (minutesUntilNotification < 2) {
-        notificationTime = now.add(const Duration(minutes: 2));
+      // If the 30-minute-before time is very close (1-5 minutes), schedule it for a few minutes from now
+      else if (minutesUntilNotification > 1 && minutesUntilNotification < 5) {
+        final notificationTime = nowManila.add(const Duration(minutes: 2));
         debugPrint(
-          '⚠️ 30-minute notification time would be in ${minutesUntilNotification < 0 ? "the past" : "$minutesUntilNotification minutes"}, scheduling for 2 minutes from now instead',
+          '⚠️ 30-minute notification time is very close ($minutesUntilNotification minutes), scheduling for 2 minutes from now to ensure delivery',
         );
         
         await _scheduleNotification(
           id: taskId * 10 + 2, // Unique ID for 30-minute notification
           title: 'Task Reminder',
           body: 'You have 30 minutes left to complete "$taskTitle"',
-          scheduledDate: notificationTime,
+          scheduledDate: notificationTime.toUtc(),
         );
       }
-      // Normal case: schedule for exactly 30 minutes before
-      else if (notificationTime.isAfter(now)) {
+      // Normal case: schedule for exactly 30 minutes before (if it's in the future)
+      else if (thirtyMinutesBefore.isAfter(nowManila)) {
         debugPrint(
-          '🔔 Scheduling 30-minute notification for: ${notificationTime.toString()}',
+          '🔔 Scheduling 30-minute notification for: ${thirtyMinutesBefore.toString()} (Manila time)',
         );
-        debugPrint('   (${notificationTime.difference(now).inMinutes} minutes from now)');
+        debugPrint('   (${timeUntilThirtyMin.inMinutes} minutes from now)');
         
         await _scheduleNotification(
           id: taskId * 10 + 2, // Unique ID for 30-minute notification
           title: 'Task Reminder',
           body: 'You have 30 minutes left to complete "$taskTitle"',
-          scheduledDate: notificationTime,
+          scheduledDate: thirtyMinutesBefore.toUtc(),
         );
       } else {
         debugPrint(
@@ -352,13 +396,19 @@ class NotificationService {
       await initialize();
     }
 
-    // Check permissions
-    final hasPermissions = await arePermissionsGranted();
-    if (!hasPermissions) {
-      debugPrint('WARNING: Notification permissions not granted!');
-      debugPrint(
-        'For emulator: Go to Settings > Apps > Your App > Notifications > Enable',
-      );
+    // Check permissions and request if needed (especially for real devices)
+    bool hasPermissions = await arePermissionsGranted();
+    if (!hasPermissions && Platform.isAndroid) {
+      debugPrint('⚠️ Notification permissions not granted, requesting...');
+      await _requestPermissions();
+      hasPermissions = await arePermissionsGranted();
+      
+      if (!hasPermissions) {
+        debugPrint('❌ WARNING: Notification permissions still not granted after request!');
+        debugPrint('   For real devices: Go to Settings > Apps > Your App > Notifications > Enable');
+        debugPrint('   Notifications may not work until permissions are granted.');
+        // Don't return - try to schedule anyway, some devices allow scheduling without explicit permission
+      }
     }
 
     final now = DateTime.now();
@@ -391,13 +441,14 @@ class NotificationService {
     }
 
     // Android notification details
+    // Use max importance and high priority for better visibility on real devices
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
           'task_reminders',
           'Task Reminders',
           channelDescription: 'Notifications for task deadlines',
-          importance: Importance.high,
-          priority: Priority.high,
+          importance: Importance.max, // Changed from high to max for real devices
+          priority: Priority.max, // Changed from high to max for real devices
           showWhen: true,
           enableVibration: true,
           playSound: true,
@@ -405,6 +456,7 @@ class NotificationService {
           ongoing: false,
           autoCancel: true,
           visibility: NotificationVisibility.public,
+          category: AndroidNotificationCategory.reminder, // Helps with Do Not Disturb mode
         );
 
     // iOS notification details
@@ -419,37 +471,51 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    // Convert DateTime to TZDateTime using local timezone
-    final scheduledTZ = tz.TZDateTime.from(scheduledDate, tz.local);
-    debugPrint('TZDateTime: ${scheduledTZ.toString()}');
+    // Convert DateTime to TZDateTime using Asia/Manila timezone
+    final manilaLocation = tz.getLocation('Asia/Manila');
+    final scheduledTZ = tz.TZDateTime.from(scheduledDate, manilaLocation);
+    debugPrint('TZDateTime (Manila): ${scheduledTZ.toString()}');
+    debugPrint('   Scheduled time in Manila: ${scheduledTZ.toString()}');
+    debugPrint('   Current time in Manila: ${tz.TZDateTime.now(manilaLocation).toString()}');
 
     try {
       // Check if exact alarms are allowed
-      bool useExactAlarm = true;
+      bool useExactAlarm = false;
       if (Platform.isAndroid) {
         final androidImplementation = _notificationsPlugin
             .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin
             >();
         if (androidImplementation != null) {
-          final canScheduleExact = await androidImplementation.canScheduleExactNotifications();
-          useExactAlarm = canScheduleExact ?? false;
-          if (!useExactAlarm) {
-            debugPrint('⚠️ Exact alarms not available, using inexact scheduling');
+          try {
+            final canScheduleExact = await androidImplementation.canScheduleExactNotifications();
+            useExactAlarm = canScheduleExact ?? false;
+            if (!useExactAlarm) {
+              debugPrint('⚠️ Exact alarms not available, using inexact scheduling');
+              debugPrint('   This is normal for devices without exact alarm permission.');
+            } else {
+              debugPrint('✅ Exact alarms available');
+            }
+          } catch (e) {
+            debugPrint('⚠️ Could not check exact alarm permission: $e');
+            useExactAlarm = false;
           }
         }
       }
       
       // Try to schedule with exact alarm first (Android 12+)
+      // Use inexactAllowWhileIdle as default for better compatibility
+      final scheduleMode = useExactAlarm 
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle;
+      
       await _notificationsPlugin.zonedSchedule(
         id,
         title,
         body,
         scheduledTZ,
         notificationDetails,
-        androidScheduleMode: useExactAlarm 
-            ? AndroidScheduleMode.exactAllowWhileIdle
-            : AndroidScheduleMode.inexactAllowWhileIdle,
+        androidScheduleMode: scheduleMode,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.time,
@@ -538,8 +604,9 @@ class NotificationService {
           'task_reminders',
           'Task Reminders',
           channelDescription: 'Notifications for task deadlines',
-          importance: Importance.high,
-          priority: Priority.high,
+          importance: Importance.max, // Changed from high to max for real devices
+          priority: Priority.max, // Changed from high to max for real devices
+          category: AndroidNotificationCategory.reminder,
         );
 
     const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(

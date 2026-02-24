@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../providers/theme_provider.dart';
+import '../../services/notification_service.dart';
 
 /// Settings Screen
 /// App preferences: Dark mode toggle, Notifications
@@ -25,7 +26,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _notificationsEnabled = prefs.getBool('notifications') ?? true;
+      _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
     });
   }
 
@@ -43,7 +44,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _notificationsEnabled = value;
     });
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('notifications', value);
+    await prefs.setBool('notifications_enabled', value);
+    
+    // Also update the notification service
+    final notificationService = NotificationService();
+    await notificationService.setNotificationsEnabled(value);
   }
 
   @override

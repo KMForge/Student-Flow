@@ -36,6 +36,19 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            
+            // ProGuard rules to prevent Firebase classes from being obfuscated
+            // These rules are applied even if minification is disabled
+            // Note: Flutter handles obfuscation differently, so minification is usually not needed
+            // If you enable minification, uncomment the following lines:
+            // isMinifyEnabled = true
+            // isShrinkResources = true
+            // Use proguard-android.txt instead of proguard-android-optimize.txt
+            // to avoid aggressive optimizations that break generic type information
+            proguardFiles(
+                getDefaultProguardFile("proguard-android.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

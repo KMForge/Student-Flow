@@ -211,35 +211,46 @@ class TaskProvider with ChangeNotifier {
     notifyListeners();
 
     try {
+      // Validate task has an ID
+      if (task.id == null) {
+        _errorMessage = 'Task ID is required for update';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+      
       // Get old task to check if deadline changed
-      final oldTask = task.id != null 
-          ? await _databaseService.getTaskById(task.id!)
-          : null;
+      final oldTask = await _databaseService.getTaskById(task.id!);
+      if (oldTask == null) {
+        _errorMessage = 'Task not found';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
       
-      await _databaseService.updateTask(task);
+      // Cancel old notifications before updating
+      await NotificationService().cancelTaskNotifications(task.id!);
+      
+      // Update task in database
+      final updateResult = await _databaseService.updateTask(task);
+      if (updateResult == 0) {
+        _errorMessage = 'Failed to update task';
+        _isLoading = false;
+        notifyListeners();
+        return false;
+      }
+      
+      // Reload tasks (this will automatically reschedule notifications via _rescheduleNotifications)
       await loadTasks(task.userId);
-      
-      // Cancel old notifications
-      if (oldTask != null && task.id != null) {
-        await NotificationService().cancelTaskNotifications(task.id!);
-      }
-      
-      // Schedule new notifications if task is pending and deadline is in the future
-      if (task.status == 'Pending' && task.deadline.isAfter(DateTime.now()) && task.id != null) {
-        await NotificationService().scheduleTaskNotifications(
-          taskId: task.id!,
-          taskTitle: task.title,
-          deadline: task.deadline,
-        );
-      }
       
       _isLoading = false;
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = 'Error updating task: ${e.toString()}';
       _isLoading = false;
       notifyListeners();
+      debugPrint('Error in updateTask: $e');
       return false;
     }
   }

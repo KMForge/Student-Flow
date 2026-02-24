@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'firebase_options.dart';
@@ -10,24 +11,47 @@ import 'providers/theme_provider.dart';
 import 'screens/splash/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'services/notification_service.dart';
+import 'services/fcm_service.dart';
+import 'fcm_background_handler.dart';
 
-/// Main Entry Point
-/// Initializes Firebase and sets up the app with Material 3 theme
+// Main Entry Point
+// Initializes Firebase and sets up the app with Material 3 theme
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize notification service
-  await NotificationService().initialize();
-
-  // Initialize Firebase with generated options
+  // Initialize Firebase FIRST (required for FCM)
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    debugPrint('✅ Firebase initialized successfully');
   } catch (e) {
-    debugPrint('Firebase initialization error: $e');
+    debugPrint('❌ Firebase initialization error: $e');
     // Even if Firebase fails to initialize, the app should still start
     // to allow UI testing. Authentication features just won't work.
+  }
+
+  // Set up FCM background message handler
+  // This must be registered before runApp() and must be a top-level function
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  debugPrint('✅ FCM background message handler registered');
+
+  // Initialize FCM service (handles token, permissions, foreground messages)
+  try {
+    await FCMService().initialize();
+    debugPrint('✅ FCM Service initialized successfully');
+  } catch (e) {
+    debugPrint('❌ FCM Service initialization error: $e');
+    // Continue app startup even if FCM fails
+  }
+
+  // Initialize local notification service (for scheduled notifications)
+  try {
+    await NotificationService().initialize();
+    debugPrint('✅ Local Notification Service initialized successfully');
+  } catch (e) {
+    debugPrint('❌ Local Notification Service initialization error: $e');
+    // Continue app startup even if local notifications fail
   }
 
   runApp(const MyApp());
@@ -65,7 +89,7 @@ class MyApp extends StatelessWidget {
     );
   }
 
-  /// Build comprehensive light theme with explicit colors
+  // Build comprehensive light theme with explicit colors
   ThemeData _buildLightTheme() {
     // StudyFlow brand colors
     const Color primaryBlue = Color(0xFF3B82F6);
