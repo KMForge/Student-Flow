@@ -151,23 +151,28 @@ class AuthService {
     try {
       // Sign out first to force account selection dialog every time
       // This ensures users can choose different accounts on each sign-in
-      await _googleSignIn.signOut().timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          debugPrint('⚠️ Google Sign-Out timeout (non-critical)');
-        },
-      ).catchError((e) {
-        debugPrint('⚠️ Google Sign-Out error (non-critical): $e');
-      });
+      await _googleSignIn
+          .signOut()
+          .timeout(
+            const Duration(seconds: 3),
+            onTimeout: () {
+              debugPrint('⚠️ Google Sign-Out timeout (non-critical)');
+            },
+          )
+          .catchError((e) {
+            debugPrint('⚠️ Google Sign-Out error (non-critical): $e');
+          });
 
       // Trigger the authentication flow (will show account picker)
       // Add timeout to prevent infinite hanging
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn().timeout(
-        const Duration(seconds: 60),
-        onTimeout: () {
-          throw Exception('Google Sign-In timed out. Please try again.');
-        },
-      );
+      final GoogleSignInAccount? googleUser = await _googleSignIn
+          .signIn()
+          .timeout(
+            const Duration(seconds: 60),
+            onTimeout: () {
+              throw Exception('Google Sign-In timed out. Please try again.');
+            },
+          );
 
       if (googleUser == null) {
         // User canceled the sign-in
@@ -218,7 +223,9 @@ class AuthService {
             await Future.any([
               Future(() async {
                 if (updates.containsKey('displayName')) {
-                  await user.updateDisplayName(updates['displayName'] as String?);
+                  await user.updateDisplayName(
+                    updates['displayName'] as String?,
+                  );
                 }
                 if (updates.containsKey('photoURL')) {
                   await user.updatePhotoURL(updates['photoURL'] as String?);
